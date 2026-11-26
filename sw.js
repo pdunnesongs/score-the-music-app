@@ -1,7 +1,7 @@
 // Score The Music service worker: keeps the app itself (code, music font, sound bank)
 // so it opens with no connection. Saved songs already live in the device's IndexedDB.
 // Calls to the engine (transcribe, export, scan, health) are never cached.
-const CACHE = 'stm-app-v5';
+const CACHE = 'stm-app-v6';
 const OMR_RUNTIME = 'stm-omr-runtime';   // kept by src/offline/phoneScan.ts, never versioned
 const SCOPE = new URL(self.registration.scope).pathname;           // e.g. /app/
 
@@ -9,7 +9,7 @@ self.addEventListener('install', (e) => {
   e.waitUntil((async () => {
     const cache = await caches.open(CACHE);
     const shell = ['./', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png',
-      'font/Bravura.woff2', 'font/Bravura.woff', 'fonts/PetalumaScript.otf', 'soundfont/sonivox.sf2'];
+      'font/Bravura.woff2', 'font/Bravura.woff', 'fonts/PetalumaScript.otf', 'soundfont/GeneralUser.sf3'];
     await Promise.allSettled(shell.map((u) => cache.add(u)));
     // every hashed bundle, including chunks loaded later (asset-list.json is written by the build),
     // and anything else named in index.html
