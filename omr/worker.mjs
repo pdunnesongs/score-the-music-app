@@ -7,6 +7,7 @@
 // out: { type: 'progress', step, fraction } | { type: 'done', xml, seconds } | { type: 'error', message }
 import * as ort from './ort/ort.wasm.min.mjs';
 import { loadPyodide } from './pyodide/pyodide.mjs';
+import Tesseract from './tess/tesseract.esm.min.js';
 
 export const MODEL_CACHE = 'stm-omr-models';
 const base = new URL('./', import.meta.url).href;
@@ -54,6 +55,31 @@ self.stmOrt = {
   async run(sess, feeds, names) { const r = await sess.run(feeds, names); return names.map((n) => r[n]); },
 };
 
+// Chord names and lyrics: tesseract.js (the same Tesseract engine and English data as the PC),
+// called from Python through tessshim.py. Started once, when the first page needs it.
+let tess = null;
+async function tessWorker() {
+  tess ??= Tesseract.createWorker('eng', 1, {
+    workerPath: base + 'tess/worker.min.js', corePath: base + 'tess/tesseract-core-simd-lstm.wasm.js',
+    langPath: base + 'tess/', gzip: true, workerBlobURL: false, cacheMethod: 'none', logger: () => {},
+    errorHandler: (e) => log(`text reader: ${e}`),
+  }).catch((e) => { tess = null; throw e; });
+  return tess;
+}
+self.stmTess = {
+  async recognize(png, psm) {
+    const w = await tessWorker();
+    await w.setParameters({ tessedit_pageseg_mode: String(psm) });
+    const { data } = await w.recognize(new Blob([png.slice()], { type: 'image/png' }), {}, { blocks: true, text: false });
+    const out = [];
+    for (const b of data.blocks ?? []) for (const p of b.paragraphs) for (const l of p.lines) for (const wd of l.words) {
+      out.push({ text: wd.text, left: wd.bbox.x0, top: wd.bbox.y0, width: wd.bbox.x1 - wd.bbox.x0, height: wd.bbox.y1 - wd.bbox.y0, conf: wd.confidence });
+    }
+    return JSON.stringify(out);
+  },
+};
+self.stmProgress = (step, f) => { progress(step, Math.max(0.08, Math.min(0.99, f))); };
+
 let pyReady = null;
 async function setup() {
   progress('Starting the music reader', 0.01);
@@ -67,6 +93,13 @@ async function setup() {
   py.unpackArchive(zip, 'zip', { extractDir: '/lib/python3.13/site-packages' });
   py.FS.mkdirTree('/lib/python3.13/site-packages/onnxruntime');
   py.FS.writeFile('/lib/python3.13/site-packages/onnxruntime/__init__.py', await (await fetch(base + 'ortshim.py')).text());
+  log('loading the score builder (music21, the engine\'s scan code)');
+  for (const z of ['music21.zip', 'stm_scan.zip']) {
+    py.unpackArchive(new Uint8Array(await (await fetch(base + z)).arrayBuffer()), 'zip', { extractDir: '/lib/python3.13/site-packages' });
+  }
+  py.FS.mkdirTree('/lib/python3.13/site-packages/pytesseract');
+  py.FS.writeFile('/lib/python3.13/site-packages/pytesseract/__init__.py', await (await fetch(base + 'tessshim.py')).text());
+  py.FS.writeFile('/lib/python3.13/site-packages/stm_device.py', await (await fetch(base + 'device.py')).text());
   await py.runPythonAsync(`
 import sys, types
 for m in ('rapidocr', 'pypdfium2', 'requests'):
@@ -77,12 +110,13 @@ import homr.segmentation.config as sc, homr.transformer.configs as tc
 for p in (sc.segnet_path_onnx, tc.default_config.filepaths.encoder_path, tc.default_config.filepaths.decoder_path):
     open(p, 'w').close()   # placeholders: ortshim loads the real models from Cache Storage
 import homr.main
+import stm_device   # music21 and the engine's scan code
 `);
   progress('Starting the music reader', 0.08);
   return py;
 }
 
-async function scan(pages) {
+async function scan(pages, title) {
   const t0 = performance.now();
   pyReady ??= setup();
   const py = await pyReady;
@@ -91,7 +125,7 @@ async function scan(pages) {
   const paths = pages.map((bytes, i) => { const p = `/tmp/page${String(i + 1).padStart(3, '0')}.png`; py.FS.writeFile(p, bytes); return p; });
   // Progress from homr's own log lines: each page is found ("Processing"), then each staff is read.
   let page = 0, staves = 0;
-  const pageShare = 0.9 / n;
+  const pageShare = 0.72 / n;   // pages are 8% to 80%; the score builder reports the rest
   const at = (inPage) => 0.08 + pageShare * (page - 1 + inPage);
   const where = () => (n > 1 ? `page ${page} of ${n}` : 'the page');
   onStderr = (line) => {
@@ -106,20 +140,17 @@ async function scan(pages) {
     }
   };
   py.globals.set('stm_paths', py.toPy(paths));
-  await py.runPythonAsync(`
-import sys
-sys.argv = ['homr', '--no-title', *stm_paths]
-try:
-    homr.main.main()
-except SystemExit as e:
-    if e.code:
-        raise RuntimeError('The music could not be read.')
-`);
-  const out = paths[0].replace(/\.png$/, '.musicxml');
-  if (!py.FS.analyzePath(out).exists) throw new Error('No music could be recognised. Try a sharper, flatter, well-lit photo.');
-  const xml = py.FS.readFile(out, { encoding: 'utf8' });
-  py.FS.unlink(out);
-  return { xml, seconds: (performance.now() - t0) / 1000 };
+  py.globals.set('stm_title', title || 'Scan');
+  // the text reader is a bonus: without it the music is still read (no chord names or words)
+  let text = true;
+  try { await tessWorker(); } catch (e) { text = false; log(`text reader didn't start: ${e?.message || e}`); }
+  const r = JSON.parse(await py.runPythonAsync(`
+import json, stm_device
+json.dumps(stm_device.read(stm_paths, stm_title, ${text ? 'True' : 'False'}))
+`));
+  for (const p of paths) for (const ext of ['.musicxml', '.txt']) { const f = p.replace(/\.png$/, ext); if (py.FS.analyzePath(f).exists) py.FS.unlink(f); }
+  const { xml, warnings } = r;
+  return { xml, warnings, seconds: (performance.now() - t0) / 1000 };
 }
 
 self.onmessage = async (e) => {
@@ -136,7 +167,7 @@ self.onmessage = async (e) => {
     if (typeof WebAssembly.Suspending !== 'function') {
       throw new Error("This browser can't run the music reader. Use Chrome 137 or newer, or scan with the engine on your PC.");
     }
-    const r = await scan(e.data.pages.map((p) => new Uint8Array(p)));
+    const r = await scan(e.data.pages.map((p) => new Uint8Array(p)), e.data.title);
     post({ type: 'done', ...r });
   } catch (err) {
     post({ type: 'error', message: String(err?.message || err).split('\n').filter(Boolean).slice(-1)[0] });

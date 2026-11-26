@@ -44,6 +44,8 @@ self.addEventListener('fetch', (e) => {
   }
   // The phone's music reader (omr/): newest from the network, else the copy that "Get phone
   // scanning ready" put in its own cache (stm-omr-runtime), which survives app updates.
+  // the reader's models (~150 MB, in parts): straight from the network; the app keeps them itself
+  if (url.pathname.startsWith(SCOPE + 'omr/models/')) return;
   if (url.pathname.startsWith(SCOPE + 'omr/')) {
     e.respondWith(fetch(req).then(async (r) => {
       if (r.ok && (await caches.has(OMR_RUNTIME))) (await caches.open(OMR_RUNTIME)).put(req.url, r.clone());

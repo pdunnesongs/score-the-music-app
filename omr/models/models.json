@@ -1,0 +1,37 @@
+{
+ "homr": "0.7.1",
+ "models": [
+  {
+   "name": "segnet_308-3296ccd40960f90ca6ab9c035cca945675d30a0f.onnx",
+   "role": "segnet",
+   "bytes": 57311361,
+   "sha256": "6ed36640db4ef5d223098b6d5efe4eda97c66b24a2c72faab8a018c749003a8d",
+   "parts": [
+    "segnet.00.part",
+    "segnet.01.part",
+    "segnet.02.part"
+   ]
+  },
+  {
+   "name": "encoder_pytorch_model_509-2293bba14bfea47d9d28411339362af15fce4c31.onnx",
+   "role": "encoder",
+   "bytes": 52861122,
+   "sha256": "ee5767286c60dc3d567fe72b6560e7285261ede1535b4215153c199ab3057559",
+   "parts": [
+    "encoder.00.part",
+    "encoder.01.part",
+    "encoder.02.part"
+   ]
+  },
+  {
+   "name": "decoder_pytorch_model_509-2293bba14bfea47d9d28411339362af15fce4c31.onnx",
+   "role": "decoder",
+   "bytes": 47356003,
+   "sha256": "99a6ac39770616bc1a20d6c409bb85fbbe21ba47f972984f9ef834fb5741b96f",
+   "parts": [
+    "decoder.00.part",
+    "decoder.01.part"
+   ]
+  }
+ ]
+}
